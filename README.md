@@ -27,7 +27,7 @@ java -cp build WikiLinkGame demo "Computer science"
 Play:
 
 ```powershell
-java -cp build WikiLinkGame play "Computer science" "Philosophy"
+java -cp build WikiLinkGame play "Philosophy"
 ```
 
 Refresh cached nodes:

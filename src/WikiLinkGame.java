@@ -3,6 +3,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -24,6 +25,11 @@ import java.util.Scanner;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
+import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpExchange;
+import java.net.InetSocketAddress;
+import java.util.concurrent.Executors;
 
 public class WikiLinkGame {
     private static final String DEFAULT_START = "Computer science";
@@ -40,16 +46,249 @@ public class WikiLinkGame {
             String start = args.length >= 2 ? joinArgs(args, 1, args.length) : DEFAULT_START;
             runDemo(service, start);
         } else if ("play".equals(command)) {
-            String start = args.length >= 2 ? args[1] : DEFAULT_START;
-            String target = args.length >= 3 ? args[2] : DEFAULT_TARGET;
+            String start = DEFAULT_START;
+            String target = args.length >= 2 ? args[1] : DEFAULT_TARGET;
             runGame(service, start, target);
         } else if ("refresh-cache".equals(command)) {
             runRefresh(cache, client, service);
         } else if ("cache-stats".equals(command)) {
             printCacheStats(cache);
+        } else if ("server".equals(command)) {
+            int port = args.length >= 2 ? Integer.parseInt(args[1]) : 8080;
+            runServer(service, port);
         } else {
             printHelp();
         }
+    }
+
+    private static void runServer(LinkService service, int port) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        server.createContext("/", new StaticHandler());
+        server.createContext("/api/links", new ApiHandler(service));
+        server.createContext("/api/config", new ConfigHandler());
+        server.setExecutor(Executors.newFixedThreadPool(10));
+        System.out.println("Wiki Link Game Server started at http://localhost:" + port);
+        server.start();
+    }
+
+    static class StaticHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            String html = getIndexHtml();
+            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    static class ApiHandler implements HttpHandler {
+        private final LinkService service;
+
+        ApiHandler(LinkService service) {
+            this.service = service;
+        }
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            Map<String, String> query = parseQuery(exchange.getRequestURI().getQuery());
+            String title = query.get("title");
+            if (title == null || title.isEmpty()) {
+                exchange.sendResponseHeaders(400, -1);
+                return;
+            }
+            try {
+                CachedLinks cached = service.getLinks(title);
+                StringBuilder json = new StringBuilder();
+                json.append("{");
+                json.append("\"title\":").append(jsonString(cached.title)).append(",");
+                json.append("\"source\":").append(jsonString(cached.source)).append(",");
+                json.append("\"links\":[");
+                for (int i = 0; i < cached.links.size(); i++) {
+                    if (i > 0) json.append(",");
+                    json.append(jsonString(cached.links.get(i)));
+                }
+                json.append("]}");
+                byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(bytes);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                exchange.sendResponseHeaders(500, -1);
+            }
+        }
+    }
+
+    static class ConfigHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String json = "{\"defaultStart\":" + jsonString(DEFAULT_START) + 
+                          ",\"defaultTarget\":" + jsonString(DEFAULT_TARGET) + "}";
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        }
+    }
+
+    private static Map<String, String> parseQuery(String query) {
+        Map<String, String> result = new HashMap<String, String>();
+        if (query == null) return result;
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=");
+            if (pair.length > 1) {
+                try {
+                    result.put(pair[0], java.net.URLDecoder.decode(pair[1], "UTF-8"));
+                } catch (IOException ignored) {}
+            }
+        }
+        return result;
+    }
+
+    private static String jsonString(String s) {
+        return "\"" + s.replace("\"", "\\\"") + "\"";
+    }
+
+    private static String getIndexHtml() {
+        return "<!DOCTYPE html>\n" +
+               "<html lang=\"en\">\n" +
+               "<head>\n" +
+               "    <meta charset=\"UTF-8\">\n" +
+               "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+               "    <title>Wiki Link Game</title>\n" +
+               "    <style>\n" +
+               "        body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }\n" +
+               "        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }\n" +
+               "        h1 { margin-top: 0; color: #2c3e50; }\n" +
+               "        .target-box { background: #e8f4fd; border-left: 4px solid #3498db; padding: 10px 15px; margin-bottom: 20px; font-weight: bold; }\n" +
+               "        .path { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; font-size: 0.9em; color: #666; }\n" +
+               "        .path-item::after { content: '→'; margin-left: 8px; }\n" +
+               "        .path-item:last-child::after { content: ''; }\n" +
+               "        .current-page { font-size: 1.5em; font-weight: bold; margin-bottom: 10px; color: #2c3e50; }\n" +
+               "        .filter-box { margin-bottom: 15px; width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }\n" +
+               "        .link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 500px; overflow-y: auto; padding: 10px; border: 1px solid #eee; border-radius: 4px; }\n" +
+               "        .link-item { background: #fff; border: 1px solid #3498db; color: #3498db; padding: 8px 12px; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.9em; transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n" +
+               "        .link-item:hover { background: #3498db; color: white; }\n" +
+               "        .status { font-size: 0.8em; color: #999; margin-top: 10px; }\n" +
+               "        .win-screen { text-align: center; padding: 40px; }\n" +
+               "        .win-screen h2 { color: #27ae60; }\n" +
+               "        .btn { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 1em; }\n" +
+               "        .btn:hover { background: #2980b9; }\n" +
+               "    </style>\n" +
+               "</head>\n" +
+               "<body>\n" +
+               "    <div id=\"app\">\n" +
+               "        <div class=\"card\">\n" +
+               "            <h1>Wiki Link Game</h1>\n" +
+               "            <div id=\"game-content\">\n" +
+               "                <div class=\"target-box\">Target: <span id=\"target-title\">...</span></div>\n" +
+               "                <div id=\"path-display\" class=\"path\"></div>\n" +
+               "                <div id=\"current-display\">\n" +
+               "                    <div class=\"current-page\" id=\"current-title\">Loading...</div>\n" +
+               "                    <input type=\"text\" id=\"filter\" class=\"filter-box\" placeholder=\"Filter links...\">\n" +
+               "                    <div id=\"link-list\" class=\"link-grid\"></div>\n" +
+               "                    <div id=\"status\" class=\"status\"></div>\n" +
+               "                </div>\n" +
+               "            </div>\n" +
+               "        </div>\n" +
+               "    </div>\n" +
+               "\n" +
+               "    <script>\n" +
+               "        let state = {\n" +
+               "            start: '',\n" +
+               "            target: '',\n" +
+               "            current: '',\n" +
+               "            path: [],\n" +
+               "            links: [],\n" +
+               "            allLinks: []\n" +
+               "        };\n" +
+               "\n" +
+               "        async function init() {\n" +
+               "            const config = await fetch('/api/config').then(r => r.json());\n" +
+               "            state.start = config.defaultStart;\n" +
+               "            state.target = config.defaultTarget;\n" +
+               "            document.getElementById('target-title').textContent = state.target;\n" +
+               "            loadPage(state.start);\n" +
+               "        }\n" +
+               "\n" +
+               "        async function loadPage(title) {\n" +
+               "            document.getElementById('current-title').textContent = 'Loading ' + title + '...';\n" +
+               "            document.getElementById('link-list').innerHTML = '';\n" +
+               "            \n" +
+               "            try {\n" +
+               "                const data = await fetch('/api/links?title=' + encodeURIComponent(title)).then(r => r.json());\n" +
+               "                state.current = data.title;\n" +
+               "                state.allLinks = data.links;\n" +
+               "                state.path.push(data.title);\n" +
+               "                \n" +
+               "                if (data.title.toLowerCase() === state.target.toLowerCase()) {\n" +
+               "                    showWin();\n" +
+               "                    return;\n" +
+               "                }\n" +
+               "                \n" +
+               "                render();\n" +
+               "                document.getElementById('status').textContent = `Loaded from ${data.source}. ${data.links.length} links found.`;\n" +
+               "            } catch (e) {\n" +
+               "                document.getElementById('current-title').textContent = 'Error loading page';\n" +
+               "                console.error(e);\n" +
+               "            }\n" +
+               "        }\n" +
+               "\n" +
+               "        function render() {\n" +
+               "            document.getElementById('current-title').textContent = state.current;\n" +
+               "            \n" +
+               "            // Render Path\n" +
+               "            const pathDiv = document.getElementById('path-display');\n" +
+               "            pathDiv.innerHTML = state.path.map(p => `<span class=\"path-item\">${p}</span>`).join('');\n" +
+               "            \n" +
+               "            // Render Links\n" +
+               "            filterLinks();\n" +
+               "        }\n" +
+               "\n" +
+               "        function filterLinks() {\n" +
+               "            const filter = document.getElementById('filter').value.toLowerCase();\n" +
+               "            const filtered = state.allLinks.filter(l => l.toLowerCase().includes(filter));\n" +
+               "            \n" +
+               "            const listDiv = document.getElementById('link-list');\n" +
+               "            listDiv.innerHTML = filtered.map(l => `<div class=\"link-item\" title=\"${l}\" onclick=\"loadPage('${l.replace(/'/g, \"\\\\'\")}')\">${l}</div>`).join('');\n" +
+               "            \n" +
+               "            if (filtered.length === 0) {\n" +
+               "                listDiv.innerHTML = '<div style=\"grid-column: 1/-1; text-align: center; padding: 20px; color: #999;\">No matching links found.</div>';\n" +
+               "            }\n" +
+               "        }\n" +
+               "\n" +
+               "        function showWin() {\n" +
+               "            const content = document.getElementById('game-content');\n" +
+               "            content.innerHTML = `\n" +
+               "                <div class=\"win-screen\">\n" +
+               "                    <h2>You Reached the Target!</h2>\n" +
+               "                    <p>Path: ${state.path.join(' → ')}</p>\n" +
+               "                    <p>Total moves: ${state.path.length - 1}</p>\n" +
+               "                    <button class=\"btn\" onclick=\"location.reload()\">Play Again</button>\n" +
+               "                </div>\n" +
+               "            `;\n" +
+               "        }\n" +
+               "\n" +
+               "        document.getElementById('filter').oninput = filterLinks;\n" +
+               "        init();\n" +
+               "    </script>\n" +
+               "</body>\n" +
+               "</html>";
     }
 
     private static void runDemo(LinkService service, String start) throws Exception {
@@ -183,13 +422,14 @@ public class WikiLinkGame {
         System.out.println();
         System.out.println("Commands:");
         System.out.println("  demo [start title]             Fetch links twice to show network then cache");
-        System.out.println("  play [start title] [target]    Play the Wikipedia link game");
+        System.out.println("  play [target]                  Play from fixed start: " + DEFAULT_START);
         System.out.println("  refresh-cache                  Check cached nodes and refresh changed ones");
         System.out.println("  cache-stats                    Print cached node and edge counts");
+        System.out.println("  server [port]                  Start the Web UI server (default 8080)");
         System.out.println();
         System.out.println("Examples:");
-        System.out.println("  java -cp build WikiLinkGame demo \"Computer science\"");
-        System.out.println("  java -cp build WikiLinkGame play \"Computer science\" \"Philosophy\"");
+        System.out.println("  java -cp build WikiLinkGame server 8080");
+        System.out.println("  java -cp build WikiLinkGame play \"Philosophy\"");
     }
 
     private static void printLinkPage(List<String> links, String filter) {
