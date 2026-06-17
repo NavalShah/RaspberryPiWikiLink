@@ -32,7 +32,7 @@ import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
 
 public class WikiLinkGame {
-    private static final String DEFAULT_START = "Computer science";
+    private static final String DEFAULT_START = "Data structures";
     private static final String DEFAULT_TARGET = "Philosophy";
 
     public static void main(String[] args) throws Exception {
@@ -175,12 +175,13 @@ public class WikiLinkGame {
                "        body { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f9; }\n" +
                "        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }\n" +
                "        h1 { margin-top: 0; color: #2c3e50; }\n" +
-               "        .target-box { background: #e8f4fd; border-left: 4px solid #3498db; padding: 10px 15px; margin-bottom: 20px; font-weight: bold; }\n" +
+               "        .setup-box { background: #fff; border: 1px solid #ddd; padding: 20px; border-radius: 8px; margin-bottom: 20px; }\n" +
+               "        .target-box { background: #e8f4fd; border-left: 4px solid #3498db; padding: 10px 15px; margin-bottom: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }\n" +
                "        .path { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; font-size: 0.9em; color: #666; }\n" +
                "        .path-item::after { content: '→'; margin-left: 8px; }\n" +
                "        .path-item:last-child::after { content: ''; }\n" +
                "        .current-page { font-size: 1.5em; font-weight: bold; margin-bottom: 10px; color: #2c3e50; }\n" +
-               "        .filter-box { margin-bottom: 15px; width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }\n" +
+               "        .filter-box, .input-box { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px; }\n" +
                "        .link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 500px; overflow-y: auto; padding: 10px; border: 1px solid #eee; border-radius: 4px; }\n" +
                "        .link-item { background: #fff; border: 1px solid #3498db; color: #3498db; padding: 8px 12px; border-radius: 4px; cursor: pointer; text-align: left; font-size: 0.9em; transition: all 0.2s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n" +
                "        .link-item:hover { background: #3498db; color: white; }\n" +
@@ -189,14 +190,31 @@ public class WikiLinkGame {
                "        .win-screen h2 { color: #27ae60; }\n" +
                "        .btn { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 1em; }\n" +
                "        .btn:hover { background: #2980b9; }\n" +
+               "        .btn-small { padding: 5px 10px; font-size: 0.8em; }\n" +
+               "        .hidden { display: none; }\n" +
                "    </style>\n" +
                "</head>\n" +
                "<body>\n" +
                "    <div id=\"app\">\n" +
                "        <div class=\"card\">\n" +
                "            <h1>Wiki Link Game</h1>\n" +
-               "            <div id=\"game-content\">\n" +
-               "                <div class=\"target-box\">Target: <span id=\"target-title\">...</span></div>\n" +
+               "            \n" +
+               "            <!-- Setup Screen -->\n" +
+               "            <div id=\"setup-screen\" class=\"setup-box\">\n" +
+               "                <h3>New Game</h3>\n" +
+               "                <label>Start Page:</label>\n" +
+               "                <input type=\"text\" id=\"start-input\" class=\"input-box\" placeholder=\"Start Page...\">\n" +
+               "                <label>Target Goal:</label>\n" +
+               "                <input type=\"text\" id=\"target-input\" class=\"input-box\" placeholder=\"Target Goal...\">\n" +
+               "                <button class=\"btn\" onclick=\"startGame()\">Start Game</button>\n" +
+               "            </div>\n" +
+               "\n" +
+               "            <!-- Game Screen -->\n" +
+               "            <div id=\"game-screen\" class=\"hidden\">\n" +
+               "                <div class=\"target-box\">\n" +
+               "                    <span>Goal: <span id=\"target-title\">...</span></span>\n" +
+               "                    <button class=\"btn btn-small\" onclick=\"resetGame()\">Change Goal</button>\n" +
+               "                </div>\n" +
                "                <div id=\"path-display\" class=\"path\"></div>\n" +
                "                <div id=\"current-display\">\n" +
                "                    <div class=\"current-page\" id=\"current-title\">Loading...</div>\n" +
@@ -210,20 +228,39 @@ public class WikiLinkGame {
                "\n" +
                "    <script>\n" +
                "        let state = {\n" +
-               "            start: '',\n" +
                "            target: '',\n" +
                "            current: '',\n" +
                "            path: [],\n" +
-               "            links: [],\n" +
                "            allLinks: []\n" +
                "        };\n" +
                "\n" +
                "        async function init() {\n" +
                "            const config = await fetch('/api/config').then(r => r.json());\n" +
-               "            state.start = config.defaultStart;\n" +
-               "            state.target = config.defaultTarget;\n" +
+               "            document.getElementById('start-input').value = config.defaultStart;\n" +
+               "            document.getElementById('target-input').value = config.defaultTarget;\n" +
+               "        }\n" +
+               "\n" +
+               "        function startGame() {\n" +
+               "            const startTitle = document.getElementById('start-input').value.trim();\n" +
+               "            state.target = document.getElementById('target-input').value.trim();\n" +
+               "            \n" +
+               "            if (!startTitle || !state.target) {\n" +
+               "                alert('Please enter both a start and target page.');\n" +
+               "                return;\n" +
+               "            }\n" +
+               "\n" +
+               "            document.getElementById('setup-screen').classList.add('hidden');\n" +
+               "            document.getElementById('game-screen').classList.remove('hidden');\n" +
                "            document.getElementById('target-title').textContent = state.target;\n" +
-               "            loadPage(state.start);\n" +
+               "            \n" +
+               "            state.path = [];\n" +
+               "            loadPage(startTitle);\n" +
+               "        }\n" +
+               "\n" +
+               "        function resetGame() {\n" +
+               "            document.getElementById('setup-screen').classList.remove('hidden');\n" +
+               "            document.getElementById('game-screen').classList.add('hidden');\n" +
+               "            // Keep existing values in inputs\n" +
                "        }\n" +
                "\n" +
                "        async function loadPage(title) {\n" +
@@ -273,15 +310,18 @@ public class WikiLinkGame {
                "        }\n" +
                "\n" +
                "        function showWin() {\n" +
-               "            const content = document.getElementById('game-content');\n" +
-               "            content.innerHTML = `\n" +
-               "                <div class=\"win-screen\">\n" +
-               "                    <h2>You Reached the Target!</h2>\n" +
-               "                    <p>Path: ${state.path.join(' → ')}</p>\n" +
-               "                    <p>Total moves: ${state.path.length - 1}</p>\n" +
-               "                    <button class=\"btn\" onclick=\"location.reload()\">Play Again</button>\n" +
-               "                </div>\n" +
+               "            const gameScreen = document.getElementById('game-screen');\n" +
+               "            const winDiv = document.createElement('div');\n" +
+               "            winDiv.className = 'win-screen';\n" +
+               "            winDiv.innerHTML = `\n" +
+               "                <h2>You Reached the Target!</h2>\n" +
+               "                <p>Goal: ${state.target}</p>\n" +
+               "                <p>Path: ${state.path.join(' → ')}</p>\n" +
+               "                <p>Total moves: ${state.path.length - 1}</p>\n" +
+               "                <button class=\"btn\" onclick=\"resetGame()\">New Game</button>\n" +
                "            `;\n" +
+               "            gameScreen.innerHTML = '';\n" +
+               "            gameScreen.appendChild(winDiv);\n" +
                "        }\n" +
                "\n" +
                "        document.getElementById('filter').oninput = filterLinks;\n" +
